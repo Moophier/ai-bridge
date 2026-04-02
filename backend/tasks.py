@@ -1,10 +1,21 @@
 import os
+import asyncio
 from redis import Redis
 from rq import Queue
 from config import Config
 
-redis_conn = Redis.from_url(Config.REDIS_URL)
-task_queue = Queue("ai-tasks", connection=redis_conn)
+try:
+    redis_conn = Redis.from_url(Config.REDIS_URL)
+    redis_conn.ping()
+    task_queue = Queue("ai-tasks", connection=redis_conn)
+    REDIS_AVAILABLE = True
+except Exception as e:
+    print(f"Redis not available, using in-memory queue: {e}")
+    task_queue = None
+    REDIS_AVAILABLE = False
+
+_task_results = {}
+_task_queue_list = []
 
 def mock_inference(model: str, prompt: str, max_tokens: int) -> str:
     """模拟推理（实际替换为vLLM调用）"""
@@ -33,3 +44,16 @@ def process_task(task_id: str, model: str, prompt: str, max_tokens: int):
             db.commit()
     finally:
         db.close()
+
+def submit_task(task_id: str, model: str, prompt: str, max_tokens: int):
+    """提交任务（Redis或内存队列）"""
+    if REDIS_AVAILABLE and task_queue:
+        task_queue.enqueue(process_task, task_id, model, prompt, max_tokens)
+    else:
+        _task_queue_list.append((task_id, model, prompt, max_tokens))
+        
+def get_queued_tasks():
+    """获取队列中的任务"""
+    if REDIS_AVAILABLE:
+        return []
+    return _task_queue_list

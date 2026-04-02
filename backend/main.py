@@ -6,7 +6,7 @@ from config import Config
 from database import get_db, engine, Base
 from models import Task
 from schemas import TaskCreate, TaskResponse, TaskSubmitResponse
-from tasks import task_queue, process_task
+from tasks import submit_task, get_queued_tasks, process_task, REDIS_AVAILABLE, _task_queue_list
 
 Base.metadata.create_all(bind=engine)
 
@@ -28,7 +28,12 @@ def submit_task(task_data: TaskCreate, db: Session = Depends(get_db)):
     db.add(task)
     db.commit()
     
-    task_queue.enqueue(process_task, task_id, task_data.model, task_data.prompt, task_data.max_tokens)
+    if REDIS_AVAILABLE:
+        submit_task(task_id, task_data.model, task_data.prompt, task_data.max_tokens)
+    else:
+        import threading
+        thread = threading.Thread(target=process_task, args=(task_id, task_data.model, task_data.prompt, task_data.max_tokens))
+        thread.start()
     
     return TaskSubmitResponse(task_id=task_id, status="queued")
 
@@ -52,3 +57,11 @@ def list_tasks(db: Session = Depends(get_db)):
 @app.get("/")
 def root():
     return {"message": "AI算力匹配桥 API", "version": Config.API_VERSION}
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "redis_available": REDIS_AVAILABLE,
+        "queue_length": len(_task_queue_list) if not REDIS_AVAILABLE else "using redis"
+    }
